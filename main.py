@@ -70,24 +70,24 @@ def train_transformer(model, dataset, output_dir, training_batch_size, eval_batc
     model.save_pretrained(f"{output}/model")
 
 
-    def evaluate_trainer(trainer, test_data, output_dir):
-        # accuracy
-        prediction_output = trainer.predict(test_data)
-        logging.info(f"Prediction metrics: {prediction_output.metrics}")
+def evaluate_trainer(trainer, test_data, output_dir):
+    # accuracy
+    prediction_output = trainer.predict(test_data)
+    logging.info(f"Prediction metrics: {prediction_output.metrics}")
 
-        # confusion matrix
-        y_preds = np.argmax(prediction_output.predictions, axis=1)
-        y_true = prediction_output.label_ids
-        cm = confusion_matrix(y_true, y_preds)
-        logging.info(f"Confusion matrix:\n{cm}")
+    # confusion matrix
+    y_preds = np.argmax(prediction_output.predictions, axis=1)
+    y_true = prediction_output.label_ids
+    cm = confusion_matrix(y_true, y_preds)
+    logging.info(f"Confusion matrix:\n{cm}")
 
-        # create file if it doesn't exist
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-        # save results to file
-        with open(f"{output_dir}/eval_results.json", "a") as f:
-            f.write("\n")
-            json.dump(prediction_output.metrics, f)
+    # create file if it doesn't exist
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    # save results to file
+    with open(f"{output_dir}/eval_results.json", "a") as f:
+        f.write("\n")
+        json.dump(prediction_output.metrics, f)
 
 
 def main():
