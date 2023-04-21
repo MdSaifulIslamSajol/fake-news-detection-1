@@ -1,4 +1,9 @@
 import os
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
+import joblib
 import logging
 import json
 import numpy as np
@@ -21,6 +26,8 @@ MODELS = {
 
 VALID_DATASETS = ['LIAR', 'FakeTrue']
 VALID_MODELS = list(MODELS.keys())
+VALID_MODELS = ["SVM"] + list(MODELS.keys())
+
 
 def compute_metrics(pred):
     lbls = pred.label_ids
@@ -29,65 +36,139 @@ def compute_metrics(pred):
     return {"acc": acc}
 
 
-def train_transformer(model, dataset, output_dir, training_batch_size, eval_batch_size, learning_rate,
-                      num_train_epochs, weight_decay,
-                      disable_tqdm=False):
 
-    # training params
-    model_ckpt = MODELS[model]
-    print(model_ckpt)
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    output = f"{output_dir}/{model_ckpt}-finetuned-{dataset['name']}"
-    tokenizer = AutoTokenizer.from_pretrained(model_ckpt)
+def train_transformer(model, dataset, output_dir, training_batch_size, eval_batch_size, learning_rate, 
+                      num_train_epochs, weight_decay, disable_tqdm=False):
 
-    
-    train_data, test_data, label_dict = prepare_data(dataset, tokenizer, Dataset)
+    if model == "SVM":
+        train_svm(dataset, output_dir)
+    else:
+        # training params
+        model_ckpt = MODELS[model]
+        print(model_ckpt)
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        output = f"{output_dir}/{model_ckpt}-finetuned-{dataset['name']}"
+        tokenizer = AutoTokenizer.from_pretrained(model_ckpt)
 
-    model = AutoModelForSequenceClassification.from_pretrained(model_ckpt, num_labels=len(label_dict)).to(device)
-    logging_steps = len(train_data) // training_batch_size
 
-    training_args = TrainingArguments(output_dir=output,
-                                          num_train_epochs=num_train_epochs,
-                                          learning_rate=learning_rate,
-                                          per_device_train_batch_size=training_batch_size,
-                                          per_device_eval_batch_size=eval_batch_size,
-                                          weight_decay=weight_decay,
-                                          evaluation_strategy="epoch",
-                                          disable_tqdm=disable_tqdm)
+        train_data, test_data, label_dict = prepare_data(dataset, tokenizer, Dataset)
 
-    trainer = Trainer(model=model,
-                      args=training_args,
-                      train_dataset=train_data,
-                      eval_dataset=test_data,
-                      compute_metrics=compute_metrics,
-                      tokenizer=tokenizer)
+        model = AutoModelForSequenceClassification.from_pretrained(model_ckpt, num_labels=len(label_dict)).to(device)
+        logging_steps = len(train_data) // training_batch_size
 
-    trainer.train()
+        training_args = TrainingArguments(output_dir=output,
+                                              num_train_epochs=num_train_epochs,
+                                              learning_rate=learning_rate,
+                                              per_device_train_batch_size=training_batch_size,
+                                              per_device_eval_batch_size=eval_batch_size,
+                                              weight_decay=weight_decay,
+                                              evaluation_strategy="epoch",
+                                              disable_tqdm=disable_tqdm)
 
-    evaluate_trainer(trainer, test_data, output_dir)
+        trainer = Trainer(model=model,
+                          args=training_args,
+                          train_dataset=train_data,
+                          eval_dataset=test_data,
+                          compute_metrics=compute_metrics,
+                          tokenizer=tokenizer)
 
-    # save model
-    model.save_pretrained(f"{output}/model")
+        trainer.train()
 
+        evaluate_trainer(trainer, test_data, output_dir)
+
+        # save model
+        model.save_pretrained(f"{output}/model")
+
+class SVMTrainer:
+    def __init__(self, model, label_dict):
+        self.model = model
+        self.label_dict = label_dict
+
+    def predict(self, text):
+        predictions = self.model.predict(text)
+        return predictions
+
+    def save_model(self, output_dir):
+        save_svm_model(self.model, output_dir)
+
+
+def train_svm(dataset, output_dir):
+    # Prepare data
+    train_data, test_data, label_dict = prepare_data(dataset, None, Dataset)
+
+    train_text = [train_data.text['input_ids'][i] for i in range(len(train_data))]
+    train_labels = [train_data.labels[i] for i in range(len(train_data))]
+
+    test_text = [test_data.text['input_ids'][i] for i in range(len(test_data))]
+    test_labels = [test_data.labels[i] for i in range(len(test_data))]
+
+    # Train SVM
+    pipeline = make_pipeline(
+        TfidfVectorizer(),
+        StandardScaler(with_mean=False),
+        SVC(kernel="linear")
+    )
+    pipeline.fit(train_text, train_labels)
+
+    # Create SVMTrainer object
+    svm_trainer = SVMTrainer(pipeline, dataset["label_dict"])
+
+    # Evaluate using evaluate_trainer
+    evaluate_trainer(svm_trainer, test_data, output_dir)
+
+    # Save model
+    svm_trainer.save_model(output_dir)
+
+
+
+
+
+def save_svm_model(model, output_dir):
+    model_path = os.path.join(output_dir, "svm_model.joblib")
+    joblib.dump(model, model_path)
 
 def evaluate_trainer(trainer, test_data, output_dir):
-    # accuracy
-    prediction_output = trainer.predict(test_data)
-    logging.info(f"Prediction metrics: {prediction_output.metrics}")
+    if isinstance(trainer, SVMTrainer):
+        # accuracy
+        test_text = [test_data.text['input_ids'][i] for i in range(len(test_data))]
+        test_labels = [test_data.labels[i] for i in range(len(test_data))]
 
-    # confusion matrix
-    y_preds = np.argmax(prediction_output.predictions, axis=1)
-    y_true = prediction_output.label_ids
-    cm = confusion_matrix(y_true, y_preds)
-    logging.info(f"Confusion matrix:\n{cm}")
+        y_preds = trainer.predict(test_text)
+        y_true = test_labels
+        acc = accuracy_score(y_true, y_preds)
+        logging.info(f"Test accuracy (SVM): {acc}")
 
-    # create file if it doesn't exist
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-    # save results to file
-    with open(f"{output_dir}/eval_results.json", "a") as f:
-        f.write("\n")
-        json.dump(prediction_output.metrics, f)
+        # confusion matrix
+        cm = confusion_matrix(y_true, y_preds)
+        logging.info(f"Confusion matrix:\n{cm}")
+
+        # create file if it doesn't exist
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+        # save results to file
+        with open(f"{output_dir}/eval_results.json", "a") as f:
+            f.write("\n")
+            json.dump({"acc": acc}, f)
+
+    else:
+        # Existing code for Transformer models
+        # accuracy
+        prediction_output = trainer.predict(test_data)
+        logging.info(f"Prediction metrics: {prediction_output.metrics}")
+
+        # confusion matrix
+        y_preds = np.argmax(prediction_output.predictions, axis=1)
+        y_true = prediction_output.label_ids
+        cm = confusion_matrix(y_true, y_preds)
+        logging.info(f"Confusion matrix:\n{cm}")
+
+        # create file if it doesn't exist
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+        # save results to file
+        with open(f"{output_dir}/eval_results.json", "a") as f:
+            f.write("\n")
+            json.dump(prediction_output.metrics, f)
 
 
 def main():
@@ -137,3 +218,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+    
+# ut python main.py FakeTrue SVM --output_dir output #run SVM in CLI

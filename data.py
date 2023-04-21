@@ -6,13 +6,18 @@ from sklearn.model_selection import train_test_split
 
 def prepare_data(dataset, tokenizer, dataset_class):
     
-    #Tokenize texts
     train_text, train_labels = dataset['train']
-    encoded_train_inputs = tokenizer(train_text, truncation=True, padding=True)
-    
     test_text, test_labels = dataset['test']
-    encoded_test_inputs = tokenizer(test_text, truncation=True, padding=True)
     
+    if tokenizer is not None:
+        # Tokenize texts
+        encoded_train_inputs = tokenizer(train_text, truncation=True, padding=True)
+        encoded_test_inputs = tokenizer(test_text, truncation=True, padding=True)
+    else:
+        # If tokenizer is None (e.g. for SVM), use the raw text
+        encoded_train_inputs = {"input_ids": train_text}
+        encoded_test_inputs = {"input_ids": test_text}
+
     # Encode labels
     label_dict = dataset['label_dict']
     encoded_train_labels = [label_dict[label] for label in train_labels]
@@ -22,6 +27,7 @@ def prepare_data(dataset, tokenizer, dataset_class):
     test_data = dataset_class(encoded_test_inputs, encoded_test_labels)
 
     return train_data, test_data, dataset['label_dict']
+
 
 
 def load_data(key):
