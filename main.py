@@ -1,3 +1,9 @@
+'''
+The following sources were utilized in the development of this project:
+https://github.com/FKarl/short-text-classification
+https://github.com/lgalke/text-clf-baselines
+'''
+
 import os
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.pipeline import make_pipeline
@@ -7,7 +13,9 @@ import joblib
 import logging
 import json
 import numpy as np
+import tokenizers
 import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader
 from sklearn.metrics import accuracy_score
 from sklearn.metrics import confusion_matrix
@@ -15,7 +23,7 @@ from tqdm import tqdm, trange
 from transformers import get_linear_schedule_with_warmup, AdamW, AutoModelForSequenceClassification, Trainer, \
     TrainingArguments, AutoTokenizer
 
-from data import Dataset, load_data, prepare_data
+from data import Dataset, Dataset2, load_data, prepare_data
 
 MODELS = {
     "BERT": "bert-base-uncased",
@@ -26,7 +34,7 @@ MODELS = {
 
 VALID_DATASETS = ['LIAR', 'FakeTrue']
 VALID_MODELS = list(MODELS.keys())
-VALID_MODELS = ["SVM"] + list(MODELS.keys())
+VALID_MODELS = ["SVM", "LSTM"] + list(MODELS.keys())
 
 
 def compute_metrics(pred):
@@ -35,49 +43,43 @@ def compute_metrics(pred):
     acc = accuracy_score(lbls, prds)
     return {"acc": acc}
 
-
-
 def train_transformer(model, dataset, output_dir, training_batch_size, eval_batch_size, learning_rate, 
                       num_train_epochs, weight_decay, disable_tqdm=False):
-
-    if model == "SVM":
-        train_svm(dataset, output_dir)
-    else:
-        # training params
-        model_ckpt = MODELS[model]
-        print(model_ckpt)
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        output = f"{output_dir}/{model_ckpt}-finetuned-{dataset['name']}"
-        tokenizer = AutoTokenizer.from_pretrained(model_ckpt)
+    # training params
+    model_ckpt = MODELS[model]
+    print(model_ckpt)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    output = f"{output_dir}/{model_ckpt}-finetuned-{dataset['name']}"
+    tokenizer = AutoTokenizer.from_pretrained(model_ckpt)
 
 
-        train_data, test_data, label_dict = prepare_data(dataset, tokenizer, Dataset)
+    train_data, test_data, label_dict = prepare_data(dataset, tokenizer, Dataset)
 
-        model = AutoModelForSequenceClassification.from_pretrained(model_ckpt, num_labels=len(label_dict)).to(device)
-        logging_steps = len(train_data) // training_batch_size
+    model = AutoModelForSequenceClassification.from_pretrained(model_ckpt, num_labels=len(label_dict)).to(device)
+    logging_steps = len(train_data) // training_batch_size
 
-        training_args = TrainingArguments(output_dir=output,
-                                              num_train_epochs=num_train_epochs,
-                                              learning_rate=learning_rate,
-                                              per_device_train_batch_size=training_batch_size,
-                                              per_device_eval_batch_size=eval_batch_size,
-                                              weight_decay=weight_decay,
-                                              evaluation_strategy="epoch",
-                                              disable_tqdm=disable_tqdm)
+    training_args = TrainingArguments(output_dir=output,
+                                            num_train_epochs=num_train_epochs,
+                                            learning_rate=learning_rate,
+                                            per_device_train_batch_size=training_batch_size,
+                                            per_device_eval_batch_size=eval_batch_size,
+                                            weight_decay=weight_decay,
+                                            evaluation_strategy="epoch",
+                                            disable_tqdm=disable_tqdm)
 
-        trainer = Trainer(model=model,
-                          args=training_args,
-                          train_dataset=train_data,
-                          eval_dataset=test_data,
-                          compute_metrics=compute_metrics,
-                          tokenizer=tokenizer)
+    trainer = Trainer(model=model,
+                        args=training_args,
+                        train_dataset=train_data,
+                        eval_dataset=test_data,
+                        compute_metrics=compute_metrics,
+                        tokenizer=tokenizer)
 
-        trainer.train()
+    trainer.train()
 
-        evaluate_trainer(trainer, test_data, output_dir)
+    evaluate_transformer(trainer, test_data, output_dir)
 
-        # save model
-        model.save_pretrained(f"{output}/model")
+    # save model
+    model.save_pretrained(f"{output}/model")
 
 class SVMTrainer:
     def __init__(self, model, label_dict):
@@ -91,16 +93,12 @@ class SVMTrainer:
     def save_model(self, output_dir):
         save_svm_model(self.model, output_dir)
 
-
 def train_svm(dataset, output_dir):
     # Prepare data
     train_data, test_data, label_dict = prepare_data(dataset, None, Dataset)
 
     train_text = [train_data.text['input_ids'][i] for i in range(len(train_data))]
     train_labels = [train_data.labels[i] for i in range(len(train_data))]
-
-    test_text = [test_data.text['input_ids'][i] for i in range(len(test_data))]
-    test_labels = [test_data.labels[i] for i in range(len(test_data))]
 
     # Train SVM
     pipeline = make_pipeline(
@@ -114,61 +112,224 @@ def train_svm(dataset, output_dir):
     svm_trainer = SVMTrainer(pipeline, dataset["label_dict"])
 
     # Evaluate using evaluate_trainer
-    evaluate_trainer(svm_trainer, test_data, output_dir)
+    evaluate_svm(svm_trainer, test_data, output_dir)
 
     # Save model
     svm_trainer.save_model(output_dir)
-
-
-
 
 
 def save_svm_model(model, output_dir):
     model_path = os.path.join(output_dir, "svm_model.joblib")
     joblib.dump(model, model_path)
 
-def evaluate_trainer(trainer, test_data, output_dir):
-    if isinstance(trainer, SVMTrainer):
-        # accuracy
-        test_text = [test_data.text['input_ids'][i] for i in range(len(test_data))]
-        test_labels = [test_data.labels[i] for i in range(len(test_data))]
+class LSTM(nn.Module):
+    def __init__(self, vocab_size, num_classes, bidirectional, hidden_size, num_layers,
+                 dropout):
+        super(LSTM, self).__init__()
 
-        y_preds = trainer.predict(test_text)
-        y_true = test_labels
-        acc = accuracy_score(y_true, y_preds)
-        logging.info(f"Test accuracy (SVM): {acc}")
+        self.input_size = vocab_size
+        self.num_classes = num_classes
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.bidirectional = bidirectional
 
-        # confusion matrix
-        cm = confusion_matrix(y_true, y_preds)
-        logging.info(f"Confusion matrix:\n{cm}")
+        self.embed = nn.EmbeddingBag(vocab_size, hidden_size)
+        embedding_dim = hidden_size
 
-        # create file if it doesn't exist
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-        # save results to file
-        with open(f"{output_dir}/eval_results.json", "a") as f:
-            f.write("\n")
-            json.dump({"acc": acc}, f)
+        self.embedding = nn.EmbeddingBag(vocab_size, embedding_dim)
 
-    else:
-        # Existing code for Transformer models
-        # accuracy
-        prediction_output = trainer.predict(test_data)
-        logging.info(f"Prediction metrics: {prediction_output.metrics}")
+        # LSTM architecture
+        self.lstm = nn.LSTM(embedding_dim, hidden_size, num_layers, dropout=dropout, bidirectional=bidirectional)
+        self.dropout = nn.Dropout(dropout)
 
-        # confusion matrix
-        y_preds = np.argmax(prediction_output.predictions, axis=1)
-        y_true = prediction_output.label_ids
-        cm = confusion_matrix(y_true, y_preds)
-        logging.info(f"Confusion matrix:\n{cm}")
+        # linear layer on top
+        self.fc = nn.Linear(hidden_size * (2 if bidirectional else 1), num_classes)
 
-        # create file if it doesn't exist
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-        # save results to file
-        with open(f"{output_dir}/eval_results.json", "a") as f:
-            f.write("\n")
-            json.dump(prediction_output.metrics, f)
+        # Loss function
+        self.loss_function = nn.CrossEntropyLoss()
+
+    def forward(self, text, offset, label):
+        # embedding
+        embedded = self.embedding(text, offset)
+        embedded = self.dropout(embedded)
+
+        # lstm
+        lstm_out, _ = self.lstm(embedded)
+        lstm_out = self.dropout(lstm_out)
+
+        # linear layer
+        out = self.fc(lstm_out)
+
+        # loss
+        loss = self.loss_function(out, label)
+        return loss, out
+
+
+def collate_for_lstm(list_of_samples):
+    """
+    Collate function that creates batches of flat docs tensor and offsets
+    """
+    offset = 0
+    flat_docs, offsets, labels = [], [], []
+    for doc, label in list_of_samples:
+        if isinstance(doc, tokenizers.Encoding):
+            doc = doc.ids
+        offsets.append(offset)
+        flat_docs.extend(doc)
+        labels.append(label)
+        offset += len(doc)
+    return torch.tensor(flat_docs), torch.tensor(offsets), torch.tensor(labels)
+
+def train_lstm(dataset, output_dir, epochs, warmup_steps, learning_rate, weight_decay, gradient_accumulation_steps,
+               training_batch_size, eval_batch_size, bidirectional, dropout, num_layers, hidden_size):
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    output = f"{output_dir}/lstm-finetuned-{dataset['name']}"
+
+    logging.info("Loading tokenizer")
+    tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')
+
+    train_data, test_data, label_dict = prepare_data(dataset, tokenizer, Dataset2)
+    vocab_size = tokenizer.vocab_size
+    embedding = None
+
+    train_loader = DataLoader(train_data,
+                              shuffle=True,
+                              collate_fn=collate_for_lstm,
+                              batch_size=training_batch_size)
+
+    model = LSTM(vocab_size,
+                 len(label_dict),
+                 bidirectional=bidirectional,
+                 dropout=dropout,
+                 num_layers=num_layers,
+                 hidden_size=hidden_size
+                 ).to(device)
+
+
+    optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    t_total = len(train_loader) // gradient_accumulation_steps * epochs
+    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps,
+                                                num_training_steps=t_total)
+    logging.info(f"Training model on {device}")
+    global_step = 0
+    training_loss, logging_loss = 0.0, 0.0
+    model.zero_grad()
+    train_iterator = trange(epochs, desc="Epoch")
+
+    for epoch in train_iterator:
+        epoch_iterator = tqdm(train_loader, desc="Iteration")
+        for step, batch in enumerate(epoch_iterator):
+            model.train()
+            batch = tuple(t.to(device) for t in batch)
+
+            flat_docs, offsets, labels = batch
+            outputs = model(flat_docs, offsets, labels)
+
+            loss = outputs[0]
+            if gradient_accumulation_steps > 1:
+                loss = loss / gradient_accumulation_steps
+            loss.backward()
+            training_loss += loss.item()
+            if (step + 1) % gradient_accumulation_steps == 0:
+                optimizer.step()
+                scheduler.step()
+                model.zero_grad()
+                global_step += 1
+
+            logging_steps = len(train_data) // 16
+            if global_step % logging_steps == 0:
+                acc, eval_loss = evaluate_lstm(model, test_data, eval_batch_size, device, output_dir)
+                logging.info(f"Epoch {epoch} Step {step} Loss {loss.item()} Eval loss {eval_loss} Acc {acc}")
+
+    # eval
+    acc, eval_loss = evaluate_lstm(model, test_data, eval_batch_size, device, output_dir)
+    logging.info(f"Evaluation loss: {eval_loss}")
+    logging.info(f"Evaluation accuracy: {acc}")
+    
+
+def evaluate_svm(trainer, test_data, output_dir):
+    # accuracy
+    test_text = [test_data.text['input_ids'][i] for i in range(len(test_data))]
+    test_labels = [test_data.labels[i] for i in range(len(test_data))]
+
+    y_preds = trainer.predict(test_text)
+    y_true = test_labels
+    acc = accuracy_score(y_true, y_preds)
+    logging.info(f"Test accuracy (SVM): {acc}")
+
+    # confusion matrix
+    cm = confusion_matrix(y_true, y_preds)
+    logging.info(f"Confusion matrix:\n{cm}")
+
+    # create file if it doesn't exist
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    # save results to file
+    with open(f"{output_dir}/eval_results.json", "a") as f:
+        f.write("\n")
+        json.dump({"acc": acc}, f)
+
+def evaluate_transformer(trainer, test_data, output_dir):
+    # Existing code for Transformer models
+    # accuracy
+    prediction_output = trainer.predict(test_data)
+    logging.info(f"Prediction metrics: {prediction_output.metrics}")
+
+    # confusion matrix
+    y_preds = np.argmax(prediction_output.predictions, axis=1)
+    y_true = prediction_output.label_ids
+    cm = confusion_matrix(y_true, y_preds)
+    logging.info(f"Confusion matrix:\n{cm}")
+
+    # create file if it doesn't exist
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    # save results to file
+    with open(f"{output_dir}/eval_results.json", "a") as f:
+        f.write("\n")
+        json.dump(prediction_output.metrics, f)
+
+def evaluate_lstm(model, test_data, eval_batch_size, device, output_dir):
+    data_loader = DataLoader(test_data,
+                             shuffle=False,
+                             collate_fn=collate_for_lstm,
+                             batch_size=eval_batch_size)
+    all_logits = []
+    all_targets = []
+    eval_steps, eval_loss = 0, 0.0
+    for batch in tqdm(data_loader, desc="Evaluating"):
+        model.eval()
+        batch = tuple(t.to(device) for t in batch)
+        with torch.no_grad():
+            flat_inputs, lengths, labels = batch
+            outputs = model(flat_inputs, lengths, labels)
+            all_targets.append(labels.detach().cpu())
+
+        eval_steps += 1
+        loss, logits = outputs[:2]
+        eval_loss += loss.mean().item()
+        all_logits.append(logits.detach().cpu())
+
+    logits = torch.cat(all_logits).numpy()
+    targets = torch.cat(all_targets).numpy()
+    eval_loss /= eval_steps
+    preds = np.argmax(logits, axis=1)
+    acc = (preds == targets).sum() / targets.size
+    
+    # confusion matrix
+    cm = confusion_matrix(targets, preds)
+    logging.info(f"Confusion matrix:\n{cm}")
+
+    # create file if it doesn't exist
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    # append result to file
+    with open(f"{output_dir}/eval_results.json", "a") as f:
+        f.write("\n")
+        json.dump({"acc": acc, "model parameter": str(model)}, f)
+
+    return acc, eval_loss
 
 
 def main():
@@ -193,6 +354,11 @@ def main():
                         help='Number of gradient accumulation steps.')
     parser.add_argument('--dropout', type=float, default=0.5, help='Dropout.')
 
+    #LSTM args
+    parser.add_argument('--bidirectional', action='store_true', help='Use bidirectional LSTM.')
+    parser.add_argument('--num_layers', type=int, default=1, help='Number of layers.')
+    parser.add_argument('--hidden_size', type=int, default=1024, help='Hidden size.')
+
     args = parser.parse_args()
 
 
@@ -204,16 +370,35 @@ def main():
     # Start training
     logging.info(f"Loading {args.dataset} data...")
     dataset = load_data(args.dataset)
+    
+    if args.model == "LSTM":
+        train_lstm(dataset,
+                    config["output_dir"],
+                    epochs=config["num_train_epochs"],
+                    warmup_steps=config["warmup_steps"],
+                    learning_rate=config["learning_rate"],
+                    weight_decay=config["weight_decay"],
+                    training_batch_size=config["batch_size"],
+                    eval_batch_size=config["batch_size"],
+                    bidirectional=config["bidirectional"],
+                    num_layers=config["num_layers"],
+                    hidden_size=config["hidden_size"],
+                    dropout=config["dropout"],
+                    gradient_accumulation_steps=config["gradient_accumulation_steps"]
+                    )
 
+    elif args.model == "SVM":
+        train_svm(dataset, config["output_dir"])
 
-    train_transformer(config["model"],
-                          dataset,
-                          config["output_dir"],
-                          training_batch_size=config["batch_size"],
-                          eval_batch_size=config["batch_size"],
-                          learning_rate=config["learning_rate"],
-                          num_train_epochs=config["num_train_epochs"],
-                          weight_decay=config["weight_decay"])
+    else:
+        train_transformer(config["model"],
+                            dataset,
+                            config["output_dir"],
+                            training_batch_size=config["batch_size"],
+                            eval_batch_size=config["batch_size"],
+                            learning_rate=config["learning_rate"],
+                            num_train_epochs=config["num_train_epochs"],
+                            weight_decay=config["weight_decay"])
 
 
 if __name__ == '__main__':

@@ -123,7 +123,19 @@ class Dataset(torch.utils.data.Dataset):
 
     def __len__(self):
         return len(self.labels)
-    
+
+class Dataset2(torch.utils.data.Dataset):
+    def __init__(self, text, labels):
+        self.text = text
+        self.labels = labels
+
+    def __getitem__(self, index):
+        text = self.text[index]
+        label = self.labels[index]
+        return text, label
+
+    def __len__(self):
+        return len(self.labels)
 
 if __name__ == '__main__':
     prep_FakeTrue()
