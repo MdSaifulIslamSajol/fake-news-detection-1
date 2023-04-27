@@ -1,6 +1,9 @@
 import csv
 import torch
 import re
+import nltk
+from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer
 import string
 from sklearn.model_selection import train_test_split
 
@@ -57,30 +60,30 @@ def prep_FakeTrue():
 
     all_texts = trues+fakes
     all_texts = [clean_text(text) for text in all_texts]
-    train, test = train_test_split(all_texts, test_size=0.25, shuffle=True, random_state = 0)
+    train, test = train_test_split(all_texts, train_size = 0.8, shuffle=True, random_state = 5)
 
-    f1 = open('data/FakeTrue/train.txt','w')
+    f = open('data/FakeTrue/train.txt','w')
     for item in train:
-        f1.write(item+'\n')
-    f1.close()
+        f.write(item+'\n')
+    f.close()
 
-    f2 = open('data/FakeTrue/test.txt','w')
+    f = open('data/FakeTrue/test.txt','w')
     for item in test:
-        f2.write(item+'\n')
-    f2.close()
+        f.write(item+'\n')
+    f.close()
+
+# Define function for cleaning data
 
 def clean_text(text):
-    # Remove URLs
-    text = re.sub(r'https?:\/\/\S+', '', text)
-    # Remove HTML tags
-    text = re.sub(r'<.*?>', '', text)
-    # Remove punctuations
-    text = text.translate(str.maketrans('', '', string.punctuation))
-    # Remove numbers
-    text = re.sub(r'\d+', '', text)
-    # Remove extra spaces
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text.lower()
+    wnl = WordNetLemmatizer()
+    stop_words = set(stopwords.words('english'))
+    text = text.lower() # to convert the text to lowercase
+    text = re.sub('[^a-zA-Z]', ' ',text) # to remove number and special characters 
+    text = text.split()  #to tokenize the text
+    text = [wnl.lemmatize(word) for word in text if not word in stop_words] #to lemmatize and remove stopwords
+    text = [word for word in text if len(word) >=3] #remove 3 or less characters; only keep words of length greater than 3
+    text = ' '.join(text) #to join all tokenized words
+    return text
 
 def load_FakeTrue(dataset):
     # load training data
@@ -138,4 +141,7 @@ class Dataset2(torch.utils.data.Dataset):
         return len(self.labels)
 
 if __name__ == '__main__':
+    nltk.download('omw-1.4')
+    nltk.download('wordnet')
+    nltk.download('stopwords')
     prep_FakeTrue()
