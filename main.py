@@ -93,7 +93,7 @@ def train_transformer(model, dataset, output_dir, training_batch_size, eval_batc
     evaluate_transformer(trainer, test_data, output_dir)
 
     # save model
-    model.save_pretrained(f"{output}/model")
+    # model.save_pretrained(f"{output}/model")
 
 class MLTrainer:
     def __init__(self, model, model_path, label_dict):
