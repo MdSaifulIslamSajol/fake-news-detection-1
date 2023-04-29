@@ -289,9 +289,9 @@ def train_lstm(dataset, output_dir, epochs, warmup_steps, learning_rate, weight_
                 global_step += 1
 
             logging_steps = len(train_data) // 16
-            if global_step % logging_steps == 0:
-                acc, eval_loss = evaluate_lstm(model, test_data, eval_batch_size, device, output_dir)
-                logging.info(f"Epoch {epoch} Step {step} Loss {loss.item()} Eval loss {eval_loss} Acc {acc}")
+            # if global_step % logging_steps == 0:
+            #     acc, eval_loss = evaluate_lstm(model, test_data, eval_batch_size, device, output_dir)
+            #     logging.info(f"Epoch {epoch} Step {step} Loss {loss.item()} Eval loss {eval_loss} Acc {acc}")
 
     # eval
     acc, eval_loss, precision, recall, f1 = evaluate_lstm(model, test_data, eval_batch_size, device, output_dir)
