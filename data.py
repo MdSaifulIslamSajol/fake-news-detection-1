@@ -72,6 +72,14 @@ def prep_FakeTrue():
         f.write(item+'\n')
     f.close()
 
+
+def prep_LIAR():
+    with open('data/LIAR/train.tsv', 'r') as tsvfile, open('data/LIAR/train.txt', 'w') as txtfile:
+        txtfile.writelines([f"{row[1]} {clean_text(row[2])}\n" for row in csv.reader(tsvfile, delimiter='\t') if row])
+    
+    with open('data/LIAR/test.tsv', 'r') as tsvfile, open('data/LIAR/test.txt', 'w') as txtfile:
+        txtfile.writelines([f"{row[1]} {clean_text(row[2])}\n" for row in csv.reader(tsvfile, delimiter='\t') if row])
+
 # Define function for cleaning data
 
 def clean_text(text):
@@ -144,4 +152,5 @@ if __name__ == '__main__':
     nltk.download('omw-1.4')
     nltk.download('wordnet')
     nltk.download('stopwords')
-    prep_FakeTrue()
+    # prep_FakeTrue()
+    prep_LIAR()
