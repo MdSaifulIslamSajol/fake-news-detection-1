@@ -294,7 +294,7 @@ def train_lstm(dataset, output_dir, epochs, warmup_steps, learning_rate, weight_
                 logging.info(f"Epoch {epoch} Step {step} Loss {loss.item()} Eval loss {eval_loss} Acc {acc}")
 
     # eval
-    acc, eval_loss = evaluate_lstm(model, test_data, eval_batch_size, device, output_dir)
+    acc, eval_loss, precision, recall, f1 = evaluate_lstm(model, test_data, eval_batch_size, device, output_dir)
     logging.info(f"Evaluation loss: {eval_loss}")
     logging.info(f"Evaluation accuracy: {acc}")
     
