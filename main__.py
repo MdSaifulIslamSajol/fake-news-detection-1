@@ -5,38 +5,25 @@ https://github.com/lgalke/text-clf-baselines
 '''
 
 import os
-from tqdm import tqdm, trange
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
 import joblib
 import logging
 import json
 import numpy as np
-
-from data import Dataset, Dataset2, load_data, prepare_data
-
-from scipy.stats import randint as sp_randint
-from scipy.stats import loguniform
-
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import GridSearchCV
-from sklearn.model_selection import RandomizedSearchCV
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.naive_bayes import MultinomialNB
-from sklearn.linear_model import LogisticRegression
-from sklearn.svm import SVC
-from sklearn.metrics import accuracy_score
-from sklearn.metrics import confusion_matrix
-
 import tokenizers
-
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-
+from sklearn.metrics import accuracy_score
+from sklearn.metrics import confusion_matrix
+from tqdm import tqdm, trange
 from transformers import get_linear_schedule_with_warmup, AdamW, AutoModelForSequenceClassification, Trainer, \
     TrainingArguments, AutoTokenizer
 
+from data import Dataset, Dataset2, load_data, prepare_data
 
 MODELS = {
     "BERT": "bert-base-uncased",
@@ -47,7 +34,7 @@ MODELS = {
 
 VALID_DATASETS = ['LIAR', 'FakeTrue']
 VALID_MODELS = list(MODELS.keys())
-VALID_MODELS = ["SVM", "LSTM","RandomForest", "NaiveBayes", "LogisticRegression"] + list(MODELS.keys())
+VALID_MODELS = ["SVM", "LSTM"] + list(MODELS.keys())
 
 
 def compute_metrics(pred):
@@ -94,10 +81,9 @@ def train_transformer(model, dataset, output_dir, training_batch_size, eval_batc
     # save model
     model.save_pretrained(f"{output}/model")
 
-class MLTrainer:
-    def __init__(self, model, model_path, label_dict):
+class SVMTrainer:
+    def __init__(self, model, label_dict):
         self.model = model
-        self.model_path = model_path
         self.label_dict = label_dict
 
     def predict(self, text):
@@ -105,72 +91,36 @@ class MLTrainer:
         return predictions
 
     def save_model(self, output_dir):
-        save_ml_model(self.model, self.model_path, output_dir)
+        save_svm_model(self.model, output_dir)
 
-
-def train_ML(dataset, model, output_dir):
+def train_svm(dataset, output_dir):
     # Prepare data
     train_data, test_data, label_dict = prepare_data(dataset, None, Dataset)
 
     train_text = [train_data.text['input_ids'][i] for i in range(len(train_data))]
     train_labels = [train_data.labels[i] for i in range(len(train_data))]
 
-    if model == "SVM":
-        # Train SVM
-        pipeline = make_pipeline(
-            TfidfVectorizer(),
-            StandardScaler(with_mean=False),
-            SVC(kernel="linear")
-            )
-    elif model == "NaiveBayes":
-        parameters = {'alpha':[0.00001,0.0005, 0.0001,0.005,0.001,0.05,0.01,0.1,0.5,1,5,10,50,100]}
-        pipeline = make_pipeline(
-            TfidfVectorizer(),
-            StandardScaler(with_mean=False),
-            RandomizedSearchCV(MultinomialNB(class_prior=[0.5, 0.5]), parameters,n_jobs = -1, cv= 5, scoring='roc_auc')
-            )
-    elif model == "RandomForest":
-        param_dist = {"max_depth": [3, None],
-              "max_features": sp_randint(1, 11),
-              "min_samples_split": sp_randint(2, 11),
-              "min_samples_leaf": sp_randint(1, 11),
-              "bootstrap": [True, False],
-              "criterion": ["gini", "entropy"],
-              "n_estimators":[10, 20,  30,  40, 50, 80,100,150, 200]}
-
-        pipeline = make_pipeline(
-            TfidfVectorizer(),
-            StandardScaler(with_mean=False),
-            RandomizedSearchCV(RandomForestClassifier(), param_distributions=param_dist, n_iter=20)
-            )
-
-    elif model == "LogisticRegression":
-        space = dict()
-        space['solver'] = ['newton-cg', 'lbfgs', 'liblinear']
-        space['penalty'] = ['none', 'l1', 'l2']
-        space['C'] = loguniform(1e-5, 100)
-
-        pipeline = make_pipeline(
-            TfidfVectorizer(),
-            StandardScaler(with_mean=False),
-            RandomizedSearchCV(LogisticRegression(), space, n_iter=20, scoring='accuracy', n_jobs=-1, cv=5, random_state=1)
-            )
-
+    # Train SVM
+    pipeline = make_pipeline(
+        TfidfVectorizer(),
+        StandardScaler(with_mean=False),
+        SVC(kernel="linear")
+    )
     pipeline.fit(train_text, train_labels)
 
     # Create SVMTrainer object
-    ml_trainer = MLTrainer(pipeline, model, dataset["label_dict"])
+    svm_trainer = SVMTrainer(pipeline, dataset["label_dict"])
 
     # Evaluate using evaluate_trainer
-    evaluate_ml(ml_trainer, test_data, output_dir)
+    evaluate_svm(svm_trainer, test_data, output_dir)
 
     # Save model
-    ml_trainer.save_model(output_dir)
+    svm_trainer.save_model(output_dir)
 
-def save_ml_model(model, model_name, output_dir):
-    model_path = os.path.join(output_dir, model_name+"_model.joblib")
+
+def save_svm_model(model, output_dir):
+    model_path = os.path.join(output_dir, "svm_model.joblib")
     joblib.dump(model, model_path)
-    
 
 class LSTM(nn.Module):
     def __init__(self, vocab_size, num_classes, bidirectional, hidden_size, num_layers,
@@ -298,7 +248,7 @@ def train_lstm(dataset, output_dir, epochs, warmup_steps, learning_rate, weight_
     logging.info(f"Evaluation accuracy: {acc}")
     
 
-def evaluate_ml(trainer, test_data, output_dir):
+def evaluate_svm(trainer, test_data, output_dir):
     # accuracy
     test_text = [test_data.text['input_ids'][i] for i in range(len(test_data))]
     test_labels = [test_data.labels[i] for i in range(len(test_data))]
@@ -306,7 +256,7 @@ def evaluate_ml(trainer, test_data, output_dir):
     y_preds = trainer.predict(test_text)
     y_true = test_labels
     acc = accuracy_score(y_true, y_preds)
-    logging.info(f"Test accuracy: {acc}")
+    logging.info(f"Test accuracy (SVM): {acc}")
 
     # confusion matrix
     cm = confusion_matrix(y_true, y_preds)
@@ -437,8 +387,8 @@ def main():
                     gradient_accumulation_steps=config["gradient_accumulation_steps"]
                     )
 
-    elif args.model in ("SVM","RandomForest","LogisticRegression","NaiveBayes"):
-        train_ML(dataset, args.model, config["output_dir"])
+    elif args.model == "SVM":
+        train_svm(dataset, config["output_dir"])
 
     else:
         train_transformer(config["model"],
