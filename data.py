@@ -115,6 +115,27 @@ def load_FakeTrue(dataset):
     dataset["test"] = (test_text, test_labels)
     dataset["label_dict"] = label_dict
 
+def load_LIAR(dataset):
+    # load training data
+    with open("data/LIAR/train.txt", "r", encoding="utf-8") as f:
+        raw_train = [line.strip() for line in f]
+    list_of_words = [line.split() for line in raw_train]
+    # first element is the label
+    train_text = [" ".join(line[1:]) for line in list_of_words]
+    train_labels = [line[0] for line in list_of_words]
+    # load test data
+    with open("data/LIAR/test.txt", "r", encoding="utf-8") as f:
+        raw_test = [line.strip() for line in f]
+    list_of_words = [line.split() for line in raw_test]
+    # first element is the label
+    test_text = [" ".join(line[1:]) for line in list_of_words]
+    test_labels = [line[0] for line in list_of_words]
+    # create label dictionary
+    label_dict = create_dict(set.union(set(train_labels), set(test_labels)))
+    # add to dataset
+    dataset["train"] = (train_text, train_labels)
+    dataset["test"] = (test_text, test_labels)
+    dataset["label_dict"] = label_dict
 
 def create_dict(labels):
     label_dict = {}
