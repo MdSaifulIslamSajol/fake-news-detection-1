@@ -320,10 +320,6 @@ def evaluate_ml(trainer, test_data, model, output_dir):
     cm = confusion_matrix(y_true, y_preds)
     logging.info(f"Confusion matrix:\n{cm}")
 
-    #plot roc and precision-recall curve and save it to output directory
-    plot_f1 (y_true,y_probs,model,output_dir)
-    plot_ROC (y_true,y_probs,model,output_dir)
-
     # create file if it doesn't exist
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -332,7 +328,10 @@ def evaluate_ml(trainer, test_data, model, output_dir):
         f.write("\n")
         json.dump({"model": model,"accuracy": acc, "precision": precision, "recall": recall, "f1": f1}, f)
 
-    return acc, precision, recall, f1
+    #plot roc and precision-recall curve and save it to output directory
+    plot_f1 (y_true,y_probs,model,output_dir)
+    plot_ROC (y_true,y_probs,model,output_dir)
+    #return acc, precision, recall, f1
 
 def plot_f1 (y_true,y_probs,model,output_dir):
     lr_precision, lr_recall, _ = precision_recall_curve(y_true, y_probs[:,1])
@@ -349,6 +348,7 @@ def plot_f1 (y_true,y_probs,model,output_dir):
     plt.legend()
     plt.savefig(output_dir+"/"+model+'_F1',dpi=300)
     #plt.show()
+    plt.close();
 
 def plot_ROC (y_true,y_probs,model,output_dir):
     fpr, tpr, thresh = roc_curve(y_true, y_probs[:,1], pos_label=1)
@@ -365,6 +365,7 @@ def plot_ROC (y_true,y_probs,model,output_dir):
     plt.legend(loc='best')
     plt.savefig(output_dir+"/"+model+'_ROC',dpi=300)
     #plt.show();
+    plt.close();
 
 
 def evaluate_transformer(trainer, test_data, output_dir):
