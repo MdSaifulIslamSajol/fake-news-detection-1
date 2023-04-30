@@ -19,6 +19,7 @@ python main.py [DATASET] [MODEL] [OPTIONS]
 `DATASET` can be:
 
 - FakeTrue
+- LIAR (Note that we did not report the results for this dataset) 
 
 `MODEL` can be:
 
