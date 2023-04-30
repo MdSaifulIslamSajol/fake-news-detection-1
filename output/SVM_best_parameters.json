@@ -1,0 +1,5 @@
+{
+    "SVM":[{"C": 0.01, 
+    "kernel": "linear",
+     "degree": 2,
+      "gamma": "scale"}]}
