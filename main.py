@@ -10,6 +10,7 @@ import joblib
 import logging
 import json
 import numpy as np
+import matplotlib.pyplot as plt
 
 from data import Dataset, Dataset2, load_data, prepare_data
 
@@ -24,8 +25,9 @@ from sklearn.model_selection import RandomizedSearchCV
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.naive_bayes import MultinomialNB
 from sklearn.linear_model import LogisticRegression
-from sklearn.svm import SVC
+from sklearn.svm import SVC, LinearSVC
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
+from sklearn.calibration import CalibratedClassifierCV
 import tokenizers
 
 import torch
@@ -103,7 +105,8 @@ class MLTrainer:
 
     def predict(self, text):
         predictions = self.model.predict(text)
-        return predictions
+        probs = self.model.predict_proba(text)
+        return predictions,probs
 
     def save_model(self, output_dir):
         save_ml_model(self.model, self.model_path, output_dir)
@@ -117,11 +120,10 @@ def train_ML(dataset, model, output_dir):
     train_labels = [train_data.labels[i] for i in range(len(train_data))]
 
     if model == "SVM":
-        # Train SVM
         pipeline = make_pipeline(
             TfidfVectorizer(),
             StandardScaler(with_mean=False),
-            SVC(kernel="linear")
+            CalibratedClassifierCV(LinearSVC(random_state=5,dual=False))         
             )
     elif model == "NaiveBayes":
         parameters = {'alpha':[0.00001,0.0005, 0.0001,0.005,0.001,0.05,0.01,0.1,0.5,1,5,10,50,100]}
@@ -142,7 +144,7 @@ def train_ML(dataset, model, output_dir):
         pipeline = make_pipeline(
             TfidfVectorizer(),
             StandardScaler(with_mean=False),
-            RandomizedSearchCV(RandomForestClassifier(), param_distributions=param_dist, n_iter=20)
+            RandomizedSearchCV(RandomForestClassifier(random_state=11), param_distributions=param_dist, n_iter=20)
             )
 
     elif model == "LogisticRegression":
@@ -154,7 +156,7 @@ def train_ML(dataset, model, output_dir):
         pipeline = make_pipeline(
             TfidfVectorizer(),
             StandardScaler(with_mean=False),
-            RandomizedSearchCV(LogisticRegression(), space, n_iter=20, scoring='accuracy', n_jobs=-1, cv=5, random_state=1)
+            RandomizedSearchCV(LogisticRegression(random_state=5), space, n_iter=20, scoring='accuracy', n_jobs=-1, cv=5, random_state=1)
             )
 
     pipeline.fit(train_text, train_labels)
@@ -163,7 +165,7 @@ def train_ML(dataset, model, output_dir):
     ml_trainer = MLTrainer(pipeline, model, dataset["label_dict"])
 
     # Evaluate using evaluate_trainer
-    evaluate_ml(ml_trainer, test_data, output_dir)
+    evaluate_ml(ml_trainer, test_data, model, output_dir)
 
     # Save model
     ml_trainer.save_model(output_dir)
@@ -171,7 +173,6 @@ def train_ML(dataset, model, output_dir):
 def save_ml_model(model, model_name, output_dir):
     model_path = os.path.join(output_dir, model_name+"_model.joblib")
     joblib.dump(model, model_path)
-    
 
 class LSTM(nn.Module):
     def __init__(self, vocab_size, num_classes, bidirectional, hidden_size, num_layers,
@@ -299,12 +300,12 @@ def train_lstm(dataset, output_dir, epochs, warmup_steps, learning_rate, weight_
     logging.info(f"Evaluation accuracy: {acc}")
     
 
-def evaluate_ml(trainer, test_data, output_dir):
+def evaluate_ml(trainer, test_data, model, output_dir):
     # accuracy
     test_text = [test_data.text['input_ids'][i] for i in range(len(test_data))]
     test_labels = [test_data.labels[i] for i in range(len(test_data))]
 
-    y_preds = trainer.predict(test_text)
+    y_preds,y_probs = trainer.predict(test_text)
     y_true = test_labels
     acc = accuracy_score(y_true, y_preds)
     precision = precision_score(y_true, y_preds, average='weighted')
@@ -319,15 +320,52 @@ def evaluate_ml(trainer, test_data, output_dir):
     cm = confusion_matrix(y_true, y_preds)
     logging.info(f"Confusion matrix:\n{cm}")
 
+    #plot roc and precision-recall curve and save it to output directory
+    plot_f1 (y_true,y_probs,model,output_dir)
+    plot_ROC (y_true,y_probs,model,output_dir)
+
     # create file if it doesn't exist
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
     # save results to file
     with open(f"{output_dir}/eval_results.json", "a") as f:
         f.write("\n")
-        json.dump({"accuracy": acc, "precision": precision, "recall": recall, "f1": f1}, f)
+        json.dump({"model": model,"accuracy": acc, "precision": precision, "recall": recall, "f1": f1}, f)
 
     return acc, precision, recall, f1
+
+def plot_f1 (y_true,y_probs,model,output_dir):
+    lr_precision, lr_recall, _ = precision_recall_curve(y_true, y_probs[:,1])
+
+    y_1 = [i for i in y_true if i==1]
+    no_skill = len(y_1) / len(y_true)
+    
+    plt.style.use('seaborn')
+    plt.plot([0, 1], [no_skill, no_skill], linestyle='--')
+    plt.plot(lr_recall, lr_precision, marker='.', label=model)
+    plt.title('Precision-Recall Plot')
+    plt.xlabel('Recall')
+    plt.ylabel('Precision')
+    plt.legend()
+    plt.savefig(output_dir+"/"+model+'_F1',dpi=300)
+    #plt.show()
+
+def plot_ROC (y_true,y_probs,model,output_dir):
+    fpr, tpr, thresh = roc_curve(y_true, y_probs[:,1], pos_label=1)
+    
+    random_probs = [0 for i in range(len(y_true))]
+    p_fpr, p_tpr, _ = roc_curve(y_true, random_probs, pos_label=1)
+    
+    plt.style.use('seaborn')
+    plt.plot(fpr, tpr, linestyle='--',color='orange', label=model)
+    plt.plot(p_fpr, p_tpr, linestyle='--', color='blue')
+    plt.title('ROC curve')
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive rate')
+    plt.legend(loc='best')
+    plt.savefig(output_dir+"/"+model+'_ROC',dpi=300)
+    #plt.show();
+
 
 def evaluate_transformer(trainer, test_data, output_dir):
     # Existing code for Transformer models
