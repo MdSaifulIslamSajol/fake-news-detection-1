@@ -515,5 +515,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-    
-# ut python main.py FakeTrue SVM --output_dir output #run SVM in CLI
