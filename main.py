@@ -120,10 +120,18 @@ def train_ML(dataset, model, output_dir):
     train_labels = [train_data.labels[i] for i in range(len(train_data))]
 
     if model == "SVM":
+        # hyperparameters to tune
+        parameters = {
+            'C': [0.01, 0.1, 1, 10],
+            'kernel': ['linear', 'rbf', 'poly'],
+            'degree': [2, 3, 4, 5],
+            'gamma': ['scale', 'auto']
+        }
+        # Train SVM
         pipeline = make_pipeline(
             TfidfVectorizer(),
             StandardScaler(with_mean=False),
-            CalibratedClassifierCV(LinearSVC(random_state=5,dual=False))         
+            RandomizedSearchCV(SVC(), parameters, n_iter=20, cv=5, n_jobs=-1, scoring='accuracy',random_state=1)         
             )
     elif model == "NaiveBayes":
         parameters = {'alpha':[0.00001,0.0005, 0.0001,0.005,0.001,0.05,0.01,0.1,0.5,1,5,10,50,100]}
@@ -160,6 +168,13 @@ def train_ML(dataset, model, output_dir):
             )
 
     pipeline.fit(train_text, train_labels)
+
+    # Save the best parameters in a dictionary
+    best_params_dict = {model: pipeline.best_params_}
+
+    # Save the dictionary as a JSON file in the output directory
+    with open(os.path.join(output_dir, f"{model}_best_parameters.json"), "w") as f:
+        json.dump(best_params_dict, f, ensure_ascii=False, indent=4)
 
     # Create SVMTrainer object
     ml_trainer = MLTrainer(pipeline, model, dataset["label_dict"])
@@ -500,5 +515,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-    
-# ut python main.py FakeTrue SVM --output_dir output #run SVM in CLI
